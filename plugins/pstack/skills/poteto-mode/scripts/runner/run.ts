@@ -210,6 +210,24 @@ function captureStream(stream: ReadableStream<Uint8Array>): StreamCapture {
   };
 }
 
+/**
+ * Bun refuses to pass args containing quotes through a .cmd/.bat file on
+ * Windows. npm shims (codex.cmd) only forward to `node <script>.js`, so run
+ * that directly.
+ */
+export function resolveSpawnArgv(executable: string, args: readonly string[]): string[] {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
+    const shim = readFileSync(executable, "utf8");
+    const script = /"%dp0%\\([^"]+\.js)"/i.exec(shim)?.[1];
+    if (script) {
+      const sibling = resolve(dirname(executable), "node.exe");
+      const node = existsSync(sibling) ? sibling : Bun.which("node");
+      if (node) return [node, resolve(dirname(executable), script), ...args];
+    }
+  }
+  return [executable, ...args];
+}
+
 type ProcessEvent =
   | { readonly kind: "exited"; readonly exitCode: number }
   | { readonly kind: "cancelled"; readonly signal: CancellationSignal }
@@ -224,7 +242,7 @@ async function runProcess(
   deadlineAt: number | null,
   cancellation: RunCancellation
 ): Promise<ProcessResult> {
-  const child = Bun.spawn([executable, ...spec.args], {
+  const child = Bun.spawn(resolveSpawnArgv(executable, spec.args), {
     cwd,
     env,
     stdin: spec.stdin === "prompt" ? "pipe" : "ignore",
